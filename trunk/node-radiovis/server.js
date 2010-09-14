@@ -354,6 +354,7 @@ var stompServer = net.createServer(function (stream) {
 			for (line in cmd) {
 				if ((topic == null) && (cmd[line].indexOf('destination:')==0)) {
 					topic = cmd[line].substring(12).replace(/\r/g,'');
+					topic=topic.replace(/^\s+/,"");
 				}
 			}
 			return topic;
@@ -369,47 +370,58 @@ var stompServer = net.createServer(function (stream) {
 
 		buffer = buffer + data;
 		if (data.indexOf(String.fromCharCode(0))>=0) {
-
-			// Take the first line as the command - ie CONNECT, SUBSCRIBE, UNSUBSCRIBE, DISCONNECT
-			var buffer_array = buffer.split("\n");
-		
-			switch (buffer_array[0].replace(/\r/g,'')) {
-				case 'CONNECT':
-					connected = true;
-					stream.write("CONNECTED\n");
-					stream.write("session: 6861707079636174\r\n\r\n\0");
-					break;
-				case 'SUBSCRIBE':
-					if (!connected) {
-						stream.write("ERROR - Not connected\r\n\0");
+			while (buffer.indexOf(String.fromCharCode(0))>=0) {
+				// Take the first line as the command - ie CONNECT, SUBSCRIBE, UNSUBSCRIBE, DISCONNECT
+				var buffer_array = buffer.split("\n");
+				var command = '';
+				for (var i = 0; i < buffer_array.length; i++) {
+					if (buffer_array[i].length>1) {
+						command = buffer_array[i];
 						break;
 					}
-					topic = extractDestination(buffer_array);
-					if (!topic) {
-						stream.write("ERROR - No destination specified\r\n\0");
+				}
+				switch (command.replace(/\s/g,'')) {
+					case 'CONNECT':
+						connected = true;
+						sys.puts("Received connect\n");
+						stream.write("CONNECTED\n");
+						stream.write("session: 6861707079636174\r\n\r\n\0");
 						break;
-					}
-					if (!checkValidTopic(topic)) {
-						stream.write("ERROR - Invalid topic name\r\n\0");
+					case 'SUBSCRIBE':
+						sys.puts("Received subscribe\n");
+						if (!connected) {
+							stream.write("ERROR - Not connected\r\n\0");
+							break;
+						}
+						topic = extractDestination(buffer_array);
+						sys.puts("Subscribing with :"+topic+"\n");
+						if (!topic) {
+							stream.write("ERROR - No destination specified\r\n\0");
+							break;
+						}
+						if (!checkValidTopic(topic)) {
+							stream.write("ERROR - Invalid topic name\r\n\0");
+							break;
+						}
+						stompQueueHandler.add_client(stream, topic);
 						break;
-					}
-					stompQueueHandler.add_client(stream, topic);
-					break;
-				case 'UNSUBSCRIBE':
-					if (!connected) {
-						stream.write("ERROR - Not connected\r\n\0");
+					case 'UNSUBSCRIBE':
+						if (!connected) {
+							stream.write("ERROR - Not connected\r\n\0");
+							break;
+						}
+						stompQueueHandler.remove_client(stream, topic);
 						break;
-					}
-					stompQueueHandler.remove_client(stream, topic);
-					break;
-				case 'DISCONNECT':
-					stream.end();
-					break;
-				default:
-					stream.write('ERROR - Unrecognised command '+buffer_array[0]+"\n\0");
+					case 'DISCONNECT':
+						stream.end();
+						break;
+					default:
+						stream.write('ERROR - Unrecognised command '+buffer_array[0]+"\n\0");
+				}
+				// Had a command, remove from the command buffer
+				var pos = buffer.indexOf(String.fromCharCode(0));
+				buffer = buffer.substring((pos+1));
 			}
-			// Had a command, clear the command buffer
-			buffer = '';
 		}
 	});
 	stream.on('end', function () {
