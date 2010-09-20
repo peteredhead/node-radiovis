@@ -149,7 +149,7 @@ try {
     
 			var last_id = url.parse(request.url, true).query['last_id'];
 			if (last_id !== undefined) {
-				if (topics.indexOf(',')>0) {
+				if (!isArray(topics)) {
 					var last_id_in_cache = cometMessageCache.get_latest_id(topics);
 					if (!last_id_in_cache) {
 						cometQueueHandler.add_client(response, topics);
@@ -163,7 +163,7 @@ try {
 					}
 				} else {
 					// Multiple topics
-					var topicList = topics.toString().split(',');
+					var topicList = topics;
 					var most_recent_topic = '',
 					most_recent_id = 0,
 					most_recent_time = 0;
@@ -186,11 +186,13 @@ try {
 					}
 				}
 			} else {
-				var topic = topics;
-				var splitPos = topics.indexOf(',');
-				if (splitPos > 0) {
-					topic = topics.substring(0,splitPos);
-				}    	
+				var topic;
+				if (!isArray(topics)) {
+		    		topic = topics;
+		    	} else {
+		    		topic = topics[0];
+		    	}
+				    	
 				if (cometMessageCache.is_topic_in_cache(topic)) {
 					var msg = cometMessageCache.get_from_cache(topic);
 					send_comet_message(response, msg["id"], msg["body"]);
@@ -695,4 +697,8 @@ function send_error(callback, code, message) {
 	callback.writeHead(code);
 	callback.write(message);
 	callback.end();
+}
+
+function isArray(obj) {
+	   return (!(obj.constructor.toString().indexOf("Array") == -1));
 }
