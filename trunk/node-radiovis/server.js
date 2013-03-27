@@ -4,7 +4,7 @@
  * A demonstration of a self-contained RadioVIS system,
  * implemented in node.js
  * 
- * Copyright 2010 Global Radio 
+ * Copyright 2010-2013 Global Radio 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License. 
  * You may obtain a copy of the License at 
@@ -18,87 +18,19 @@
  * limitations under the License. 
 */
 
-var sys = require('sys'),
+// Application Configuration
+var restrict_admin = false, // Restricts access to the admin console to localhost only
+    port = 80,              // Port the web server (vis-http and admin interface) runs on
+    stomp_port = 61613;     // Port STOMP server runs on
+    
+var util = require('util'),
 	net = require('net'),
 	http = require("http"),
 	url = require("url"),
-	fs = require('fs');
-
-function Sender(msgFile, topic) {
-	var self = this;
-	this.running = true;
-	this.senderInterval;
-	this.msgFile = msgFile;
-	this.topic = topic;
-	this.position = 0;
-}
-
-Sender.prototype.reload = function() {
-	if (!this.running) {
-		return;
-	}
-	var msgFile = this.msgFile;
-	this.stop();
-	var self = this;
-	sys.puts("Reloading "+this.msgFile);
-	fs.readFile(msgFile, function(err, data) {
-		if (err) {
-			sys.puts(err);
-		}
-		fs.watchFile(msgFile, function (curr, prev) {
-			  self.reload();
-		});
-		var messages = String(data); 
-		var msgList = messages.split("\n");
-		var msgCount = msgList.length;
-		
-		self.msgList = msgList;
-		self.msgCount = msgCount;
-		self.senderInterval = setInterval(sendMsg, 8000);
-		self.send();
-		function sendMsg() {
-			self.send();
-		}
-	});
-};
-
-Sender.prototype.send = function() {
-	if ((this.msgList[this.position].indexOf('TEXT') == 0) || (this.msgList[this.position].indexOf('SHOW') == 0)) {
-		var timestamp = new Date().getTime();
-		var random = Math.floor(Math.random()*200);
-		var msgId = timestamp+':'+random;
-		cometQueueHandler.process_queue(this.topic, msgId, this.msgList[this.position]);
-		stompQueueHandler.process_queue(this.topic, msgId, this.msgList[this.position]);
-	}
-	this.position++;
-	if (this.position == this.msgCount) { this.position = 0;}
-	return
-};
-
-Sender.prototype.stop = function() {
-	sys.puts("Stopping sender");
-	clearInterval(this.senderInterval);
-	fs.unwatchFile(this.msgFile);
-	return
-};
-
-Sender.prototype.setRunning = function(state) {
-	var self = this;
-	if (state == 'stop') {
-		self.running = false;
-		self.stop();
-	}
-	if (state == 'start') {
-		self.running = true;
-		self.reload();
-	}
-	return self.running;
-};
-
-Sender.prototype.changeTopic = function (topic) {
-	this.topic = topic;
-	return
-};
+	fs = require('fs'),
+	sender = require('./sender.js');
+	stomp = require('./stomp.js'),
+	comet = require('./comet.js');
 
 var cometPath = "/comet",
 	adminPath = "/admin",
@@ -106,29 +38,31 @@ var cometPath = "/comet",
 	demoPath = "/demo",
 	jsPath = "/js";
 
-cometQueueHandler = new CometQueueHandler();
-cometMessageCache = new CometMessageCache();
-stompQueueHandler = new StompQueueHandler();
-stompMessageCache = new StompMessageCache();
-
 textFile = 'text.txt';
 imageFile = 'slides.txt';
 topicFile = 'topic.txt';
 
+var stompServer = stomp.Server(stomp_port);
+cometQueueHandler = new comet.QueueHandler();
+cometMessageCache = new comet.MessageCache();
+stompQueueHandler = new stomp.QueueHandler();
+stompMessageCache = new stomp.MessageCache();
+
+// Load any previously set topic base from file
 try {
-baseTopic = fs.readFileSync(topicFile, 'utf8');
+    baseTopic = fs.readFileSync(topicFile, 'utf8');
 } catch (err) {
-	sys.puts(err);
-	sys.puts("Unable to load "+topicFile);
-	sys.puts("Setting topic to /topic/fm/ce1/cc86/09630");
+	util.error(err);
+	util.log("Unable to load "+topicFile);
+	util.log("Setting topic base to /topic/fm/ce1/cc86/09630");
 	baseTopic = "/topic/fm/ce1/cc86/09630";
 }
 
 // Start the sender
-var textSender = new Sender(textFile,baseTopic+'/text');
+var textSender = new sender.Sender(textFile,baseTopic+'/text');
+var imgSender = new sender.Sender(imageFile,baseTopic+'/image');
 textSender.reload();
-var imgSender = new Sender(imageFile,baseTopic+'/image');
-imgSender.reload();
+setTimeout(imgSender.reload(),1000);
 
 try {
 	http.createServer(function(request, response) {
@@ -158,7 +92,7 @@ try {
 							cometQueueHandler.add_client(response, topics);
 						} else {
 							var msg = cometMessageCache.get_from_cache(topics);
-							send_comet_message(response, msg['id'], msg['body']);
+							cometQueueHandler.send_message(response, msg['id'], topics, msg['body']);
 						}
 					}
 				} else {
@@ -182,7 +116,7 @@ try {
 						cometQueueHandler.process_request(response, topicList);
 					} else {
 						var msg = cometMessageCache.get_from_cache(most_recent_topic);
-						send_comet_message(response, msg["id"], msg["body"]);
+						cometQueueHandler.send_message(response, msg["id"], most_recent_topic, msg["body"]);
 					}
 				}
 			} else {
@@ -195,7 +129,7 @@ try {
 				    	
 				if (cometMessageCache.is_topic_in_cache(topic)) {
 					var msg = cometMessageCache.get_from_cache(topic);
-					send_comet_message(response, msg["id"], msg["body"]);
+					cometQueueHandler.send_message(response, msg["id"], topic, msg["body"]);
 				} else {
 					cometQueueHandler.process_request(response, topics);
 				}
@@ -204,7 +138,7 @@ try {
 		} else if (path.indexOf(slidesPath) == 0 || path.indexOf(demoPath) == 0 || path.indexOf(jsPath) == 0) {
 			serve_file(path, request, response);
 		} else if (path.indexOf(adminPath) == 0) {
-			if (request.client.remoteAddress != "127.0.0.1") {
+			if (restrict_admin && request.client.remoteAddress != "127.0.0.1") {
 				send_error(response, 403, 'Administration is restricted to local access only');
 			}
 			if (path.indexOf('/admin/loadMessages/')==0) {
@@ -229,7 +163,7 @@ try {
 				
 				fs.readFile(msgFile, function(err, data) {
 					if (err) {
-						sys.puts(err);
+						util.error(err);
 					}
 					data = String(data);
 					data_array = data.split("\n");
@@ -257,12 +191,12 @@ try {
 					send_error(response, 500, 'Invalid topic');
 					return
 				}
-				sys.puts('Changing topic to '+newTopic);
+				util.log('Changing topic to '+newTopic);
 			
 			
 				fs.writeFile(topicFile, newTopic, function(err) {
 				    if(err) {
-				        sys.puts(err);
+				        util.error(err);
 				    } 
 				}); 		
 				textSender.changeTopic(newTopic+'/text');
@@ -314,13 +248,13 @@ try {
 					var fileData=prefix+msg0+"\n"+prefix+msg1+"\n"+prefix+msg2+"\n"+prefix+msg3+"\n";
 					fs.writeFile(filename, fileData, function(err) {
 					    if(err) {
-					        sys.puts(err);
+					        util.error(err);
 					    } 
 					}); 					
 					return
 				}
 				catch (err) {
-					sys.puts(err);
+					util.erorr(err);
 					send_error(response, 500, "Error: " +err);
 					return;
 				}	
@@ -332,302 +266,17 @@ try {
 			response.write("Requested URL not found");
 			response.end();
 		}
-	}).listen(80);
+	}).listen(port);
 } catch (err) {
 	if (err == "Error: EADDRINUSE, Address already in use") {
-		sys.puts(err);
+		util.erorr(err);
 		process.exit(code=0);
 	} else {
-		sys.puts(err);
+		util.error(err);
 	}
 }	
 
-var stompServer = net.createServer(function (stream) {
-	var buffer = '';
-	var connected = false;
-	var self = this;
-	stream.setEncoding('utf8');
-	stream.on('connect', function () {
-	});
-	
-	stream.on('data', function (data) {
-		function extractDestination(cmd) {
-			topic = null;
-			for (line in cmd) {
-				if ((topic == null) && (cmd[line].indexOf('destination:')==0)) {
-					topic = cmd[line].substring(12).replace(/\r/g,'');
-					topic=topic.replace(/^\s+/,"");
-				}
-			}
-			return topic;
-		}
-		
-		function checkValidTopic(topic) {
-			if (topic.indexOf('/topic/')!=0) {
-				return false;
-			} else {
-				return true;
-			}
-		}
-
-		buffer = buffer + data;
-		if (data.indexOf(String.fromCharCode(0))>=0) {
-			while (buffer.indexOf(String.fromCharCode(0))>=0) {
-				// Take the first line as the command - ie CONNECT, SUBSCRIBE, UNSUBSCRIBE, DISCONNECT
-				var buffer_array = buffer.split("\n");
-				var command = '';
-				for (var i = 0; i < buffer_array.length; i++) {
-					if (buffer_array[i].length>1) {
-						command = buffer_array[i];
-						break;
-					}
-				}
-				switch (command.replace(/\s/g,'')) {
-					case 'CONNECT':
-						connected = true;
-						sys.puts("Received connect\n");
-						stream.write("CONNECTED\n");
-						stream.write("session: 6861707079636174\r\n\r\n\0");
-						break;
-					case 'SUBSCRIBE':
-						sys.puts("Received subscribe\n");
-						if (!connected) {
-							stream.write("ERROR - Not connected\r\n\0");
-							break;
-						}
-						topic = extractDestination(buffer_array);
-						sys.puts("Subscribing with :"+topic+"\n");
-						if (!topic) {
-							stream.write("ERROR - No destination specified\r\n\0");
-							break;
-						}
-						if (!checkValidTopic(topic)) {
-							stream.write("ERROR - Invalid topic name\r\n\0");
-							break;
-						}
-						stompQueueHandler.add_client(stream, topic);
-						break;
-					case 'UNSUBSCRIBE':
-						if (!connected) {
-							stream.write("ERROR - Not connected\r\n\0");
-							break;
-						}
-						stompQueueHandler.remove_client(stream, topic);
-						break;
-					case 'DISCONNECT':
-						stream.end();
-						break;
-					default:
-						stream.write('ERROR - Unrecognised command '+buffer_array[0]+"\n\0");
-				}
-				// Had a command, remove from the command buffer
-				var pos = buffer.indexOf(String.fromCharCode(0));
-				buffer = buffer.substring((pos+1));
-			}
-		}
-	});
-	stream.on('end', function () {
-		stream.end();
-	});
-});
-stompServer.listen(61613);
-
-stompServer.addListener("error", function() {
-	
-});
-
-function CometQueueHandler() {
-	queue = new Array();
-}
-
-CometQueueHandler.prototype.process_request = function (callback, topics) {
-	if (topics.constructor == Array) {
-		for (var i = 0; i < topics.length; i++) {
-			this.add_client(callback, topics[i]);
-		}
-	} else {
-		this.add_client(callback, topics);
-	}
-	return
-};
-
-CometQueueHandler.prototype.add_client = function (callback, topic) {
-	if (queue[topic] === undefined) {
-		var callbacks = new Array(callback);
-		queue[topic] = callbacks;
-	} else {
-		queue[topic].push(callback);
-	}
-	cometMessageCache.create_topic(topic);
-	return
-};
-
-CometQueueHandler.prototype.process_queue = function (topic, message_id, message) {
-	if (queue[topic] == undefined) {
-		queue[topic] = new Array();
-	}
-	cometMessageCache.update_message(topic, message_id, message);
-	while (queue[topic].length > 0) {
-		callback = queue[topic].shift();
-		send_comet_message(callback, message_id, message);
-	}
-	queue[topic] = new Array();
-	return
-};
-
-function CometMessageCache() {
-	store = new Array();
-}
-
-CometMessageCache.prototype.create_topic = function(topic) {
-	if (store[topic] === undefined) {
-		store[topic] = new Array();
-	}
-	return
-};
-
-CometMessageCache.prototype.is_topic_in_cache = function (topic) {
-	return (topic in store); 
-};
-
-CometMessageCache.prototype.get_latest_time = function (topic) {
-	if (this.is_topic_in_cache(topic)) {
-		return store[topic]['timestamp'];
-	} else {
-		return false;
-	}
-};    
-
-CometMessageCache.prototype.get_latest_id = function (topic) {
-	if (this.is_topic_in_cache(topic)) {
-		return store[topic]['id'];
-	} else {
-		return false;
-	}
-};
-
-CometMessageCache.prototype.get_from_cache = function (topic) {
-	if (this.is_topic_in_cache(topic)) {
-		return store[topic];
-	} else {
-		return false;
-	}
-};
-
-CometMessageCache.prototype.update_message = function (topic, id, body) {
-	if (!this.is_topic_in_cache(topic)) {
-		store[topic] = new Array();
-	}
-	store[topic]['body'] = body;
-	store[topic]['id'] = id;
-	store[topic]['timestamp'] = new Date().getTime();
-	return
-};
-
-function StompQueueHandler() {
-	stompQueue = new Array();
-}
-
-StompQueueHandler.prototype.process_request = function (callback, topics) {
-	if (topics.constructor == Array) {
-		for (var i = 0; i < topics.length; i++) {
-			this.add_client(callback, topics[i]);
-		}
-	} else {
-		this.add_client(callback, topics);
-	}
-};
-
-StompQueueHandler.prototype.add_client = function (callback, topic) {
-	if (topic.charCodeAt(topic.length-1)==13) {topic = topic.substring(0,topic.length-1);}
-	if (stompQueue[topic] == undefined) {
-		var callbacks = new Array(callback);
-		stompQueue[topic] = callbacks;
-	} else {
-		stompQueue[topic].push(callback);
-	}
-	stompMessageCache.create_topic(topic);
-	if (stompMessageCache.is_topic_in_cache(topic)) {
-		
-		var fromCache = stompMessageCache.get_from_cache(topic);
-		send_stomp_message(callback, fromCache['id'], fromCache['body']);
-	}
-};
-
-StompQueueHandler.prototype.remove_client = function (callback, topic) {
-	if (stompQueue[topic] == undefined) {
-		return
-	}
-	var i = 0;
-	while (i < array.length) {
-		if (stompQueue[topic][i] == callback) {
-			stompQueue[topic].splice(i, 1);
-		} else {
-			i++;
-		}
-	}
-};
-
-StompQueueHandler.prototype.process_queue = function (topic, message_id, message) {
-	if (stompQueue[topic] == undefined) {
-		stompQueue[topic] = new Array();
-	}
-	stompMessageCache.update_message(topic, message_id, message);
-	for (i=0;i<stompQueue[topic].length;i++) {
-		send_stomp_message(stompQueue[topic][i],message_id,message);
-	}
-	return
-};
-
-function StompMessageCache() {
-	stompStore = new Array();
-}
-
-StompMessageCache.prototype.create_topic = function(topic) {
-	if (stompStore[topic] === undefined) {
-		stompStore[topic] = new Array();
-	}
-	return
-};
-
-StompMessageCache.prototype.is_topic_in_cache = function (topic) {
-	return (topic in stompStore); 
-};
-
-StompMessageCache.prototype.get_from_cache = function (topic) {
-	if (this.is_topic_in_cache(topic)) {
-		return stompStore[topic];
-	} else {
-		return false;
-	}
-};
-
-StompMessageCache.prototype.update_message = function (topic, id, body) {
-	if (!this.is_topic_in_cache(topic)) {
-		stompStore[topic] = new Array();
-	}
-	stompStore[topic]['body'] = body;
-	stompStore[topic]['id'] = id;
-	return
-};
-
-function send_comet_message(callback, message_id, message) {
-	try {
-		callback.writeHead(200, {'RadioVIS-Message-ID':message_id,'Cache-Control':'no-store, no-cache, must-revalidate','Pragma':'no-cache'});
-		callback.write(message);
-		callback.end();
-	} catch (err) {
-		return
-	}
-}
-
-function send_stomp_message(callback, message_id, message) {
-	try {
-		callback.write("MESSAGE\nmessage-id:ID:"+message_id+"\n\n"+message+"\n\0");
-	} catch (err) {
-		return
-	}
-}
+util.log('Server started on port '+port);
 
 function serve_file(path, request, callback) {
 	if (path.indexOf('..') >= 0) {
@@ -640,7 +289,7 @@ function serve_file(path, request, callback) {
 	
 	fs.stat('.'+path, function (err, stats) {
 		if (err) {
-			sys.puts(err);
+			util.error(err);
 			send_error(callback, 404, "Requested URL not found");
 			return
 		}
@@ -685,7 +334,6 @@ function serve_file(path, request, callback) {
       			default:
       				mime = "text/plain";
       		}
-      
       		callback.writeHead(200, {'Content-Length':size,'Last-Modified':modified.toUTCString()});  
       		callback.write(data, "binary");  
       		callback.end();  
