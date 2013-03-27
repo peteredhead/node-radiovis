@@ -1,0 +1,375 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>RadioVIS Administration</title>
+<style>
+	BODY { font-family:Arial, Helvetica, sans-serif; padding: 2px 10px;}
+	H1, H2 {margin: 5px 0px;}
+	#status { clear:both; font-size:0.8em;}
+	#left {	width: 48%;	float: left; }
+	#right { width: 48%; float: right; }
+	
+	#textList li, #imageList li { border:1px solid #DADADA; background-color:#EFEFEF; padding:3px 5px; margin-bottom:3px; 
+									margin-top:3px; width:90%; list-style-type:none; color:#666666; font-size:0.8em; }
+	li:hover { background-color:#FFF; cursor:move; }
+	#viewer { clear:both; position: relative; left: 50%; padding-top: 10px; margin-left: -165px; width: 330px; height: 320px; overflow: hidden;}
+	#viewerQWERTY { position: absolute; left: 50%; margin-left: -160px; width: 320px; height: 320px; overflow: hidden; }
+   
+	#viewer ul { list-style: none; width: 340px; height: 250px; margin: 0px; padding: 0px;}
+	#viewer ul li { position: relative; top: 0; left: 0; }
+	#viewer ul li img { width: 320px; height: 240px; border: 1px solid #aaa;
+				 -moz-box-shadow: 3px 3px 4px #ccc; -webkit-box-shadow: 3px 3px 4px #ccc; box-shadow: 3px 3px 4px #ccc; 
+				/* For IE 8 */ -ms-filter: "progid:DXImageTransform.Microsoft.Shadow(Strength=4, Direction=135, Color='#cccccc')";
+				/* For IE 5.5 - 7 */ filter: progid:DXImageTransform.Microsoft.Shadow(Strength=4, Direction=135, Color='#cccccc'); }
+	
+	#serverStatus {font-style:italic}
+	#cometText {text-align: center;}
+	.instructions { background-color: #FFF6C6; padding: 5px; margin: 5px; color: #575757; font-size: 0.8em; border: 1px solid #ededed;}
+	
+	#stationForm select { float: left; clear: left; }
+	#stationForm input { float:left; clear: left; text-align:center;}
+	#stationForm label { float: left; clear: left; font-size:0.7em; text-align:center;}
+	#stationError { width:90%;  background-color: #ffffcc; border: 1px solid #dedede;  margin: 5px; padding: 2px;  display: none; }
+	.parameter, .amParameter, .dabParameter, .fmParameter, .hdParameter{ float: left; border: 1px #c7c7c7 solid; padding: 2px; padding-left:5px; margin-right:5px;}
+	.dabParameter, .fmParameter, .hdParameter { display: none; }
+	#topic { float: right; height: 2em; }	
+	
+</style>
+<script type="text/javascript" src="/js/jquery-1.2.6.min.js"></script>
+<script type="text/javascript" src="/js/jquery-ui.min.js"></script>
+<script type="text/javascript" src="/js/jquery.editable-1.3.3.min.js"></script>
+<script type="text/javascript" src="/js/Visclient.class.js"></script>
+<script type="text/javascript">
+var baseTopic;
+var vis;
+$(function() {
+	var allInputs = $("#stationForm :text");
+	var vis;
+	$.get("/admin/getTopic", function(data) {
+		baseTopic = data;
+		topicArray = data.split('/');
+		var bearer = topicArray[2];
+		$("#bearer").val(bearer);
+		changeBearer(bearer);
+		switch (bearer) {
+			case "am":
+				if (topicArray[3] == "drm") {
+					$("#amType").val("drm");
+				} else {
+					$("#amType").val("amss");
+				}
+				$("#amSid").val(topicArray[4]);
+				break;
+			case "dab":
+				$("#dabEcc").val(topicArray[3]);
+				$("#dabEid").val(topicArray[4]);
+				$("#dabSid").val(topicArray[5]);
+				$("#dabScids").val(topicArray[6]);
+				if (parseInt(topicArray[7]) > -1 && parseInt(topicArray[7]) < 1024) {
+					$("#dabPa").val(topicArray[7]);
+				} else {
+					$("#dabAppty").val(topicArray[7]);
+				}
+				break;
+			case "fm":
+				$("#fmEcc").val(topicArray[3]);
+				$("#fmPi").val(topicArray[4]);
+				$("#fmFreq").val(parseInt(topicArray[5],10)/100);
+				break;
+			case "hd":
+				$("#hdCc").val(topicArray[3]);
+				$("#hdTx").val(topicArray[4]);
+				break;
+		}
+
+	    var topics = new Array();
+	    vis = new VisClient("/comet",[baseTopic+"/image", baseTopic+"/text" ],'',
+			function (rsp) {
+	        	if(rsp.type == "image") {
+		        	$("#viewer ul").html("<li><img src=\"" + rsp.src + "\" width=\"320\" height=\"240\"></li>");
+				} else if(rsp.type == "text") {
+	            	$("#cometText").text(rsp.msg);
+				}
+			}
+		);
+	});
+
+	
+	$("#bearer").change(function() {
+		var bearer = $("#bearer").val();
+		changeBearer(bearer);
+		
+	});
+
+	$("#setButton").click(function() {
+		$("#stationError").hide("fast", function() {
+		allInputs.css("background-color","#FFFFFF");
+		var bearer = $("#bearer").val();
+		var topic;
+		switch(bearer) {
+		case "am":
+			// AM Service /topic/am/{drm|amss}/sid
+			var amType = $("#amType").val();
+			var amSid = $("#amSid").val(); // sid = 6 char hex
+
+			if (!amSid.match(/^([0-9A-Fa-f]{6})$/)) {stationError("amSid", "Service ID must be a 6 character hexdecimal");}
+
+			topic = "/topic/am/"+amType+"/"+amSid;
+			break;
+		
+		case "dab":
+			// DAB Service /topic/dab/ecc/sid/scids[/pa | appty-uatype]                                  
+			var dabEcc = $("#dabEcc").val(); // ecc = 3char hex
+			var dabEid = $("#dabEid").val(); // eid = 4char hex
+			var dabSid = $("#dabSid").val(); // sid = 4 or 8 char hex
+			var dabScids = $("#dabScids").val(); // scids = 1 or 3 char hex
+			var dabAppty = $("#dabAppty").val(); // appty-uatype = 2 char hex-3char hex
+			var dabPa = $("#dabPa").val(); // pa = int 0 > 1023
+
+			if ((dabAppty.length > 0) && (!dabAppty.match(/^([0-9A-Fa-f]{2})-([0-9A-Fa-f]{3})$/))) {stationError("dabAppty", "XPAD Application type and User Application type must be in the format xx-xxx, if specified");}
+			if ((dabPa.length > 0) && (!(parseInt(dabPa) > -1 && parseInt(dabPa) < 1024)))  {stationError("dabPa", "The packet address must be between 0 and 1023 if specified");}
+			if ((dabAppty.length > 0) && (dabPa.length > 0)) {stationError("dabAppty", "The XPAD Application type and Package address cannot both be specified");}
+			if (!dabScids.match(/^([0-9A-Fa-f]{1})$/) && !dabScids.match(/^([0-9A-Fa-f]{3})$/)) {stationError("dabScids", "Service Component ID must be a 1 or 3 character hexdecimal");}
+			if (!dabSid.match(/^([0-9A-Fa-f]{4})$/) && !dabSid.match(/^([0-9A-Fa-f]{8})$/)) {stationError("dabSid", "Service ID must be a 4 or 8 character hexdecimal");}
+			if (!dabEid.match(/^([0-9A-Fa-f]{4})$/)) {stationError("dabEid", "Ensemble ID must be a 4 character hexdecimal");}
+			if (!dabEcc.match(/^([0-9A-Fa-f]{3})$/)) {stationError("dabEcc", "Country Code must be a 3 character hexdecimal");}
+
+			topic = "/topic/dab/"+dabEcc+"/"+dabEid+"/"+dabSid+"/"+dabScids;
+			if ((dabAppty.length > 0) || (dabPa.length > 0)) { topic = topic + "/" +dabAppty+dabPa;}
+			
+			break;
+
+		case "fm":
+			// FM /topic/{ecc|country}/pi/freq
+			var fmEcc = $("#fmEcc").val(); // ecc = 3char hex || country = 2char string
+			var fmPi = $("#fmPi").val(); // pi = 4char hex
+			var fmFreq = $("#fmFreq").val(); // freq = 5 digit int
+
+			if (!parseFloat(fmFreq) || (parseFloat(fmFreq)*100)<8750 || (parseFloat(fmFreq)*100)>10800) {stationError("fmFreq", "Invalid frequency specified");}
+			if (!fmPi.match(/^([0-9A-Fa-f]{4})$/)) {stationError("fmPi", "PI code must be a 4 character hexdecimal");}
+			if (!fmEcc.match(/^([0-9A-Fa-f]{3})$/) && !fmEcc.match(/^([0-9A-Za-z]{2})$/)) {stationError("fmEcc", "Either a three character hexdecimal or two character country code must be specified");}
+
+			topic = "/topic/fm/"+fmEcc+"/"+fmPi+"/"+padFreq(parseFloat(fmFreq)*100);
+			
+			break;
+
+		case "hd":
+			// HD Radio /topic/hd/cc/tx
+			var hdTx = $("#hdTx").val(); // tx = 5char hex
+			var hdCc = $("#hdCc").val(); // cc = 3char hex
+
+			if (!hdCc.match(/^([0-9A-Fa-f]{3})$/)) {stationError("hdCc", "Country Code must be a 3 character hexdecimal");}
+			if (!hdTx.match(/^([0-9A-Fa-f]{5})$/)) {stationError("hdTx", "Transmitter Indentifier must be a 5 character hexdecimal");}
+
+			topic = "/topic/hd/"+hdTx+"/"+hdCc;
+			
+			break;
+		}	
+
+		if ($("#stationError").is(":hidden")) {
+			// /admin/setTopic/
+			$.get("/admin/setTopic"+topic,  function(data) {
+				$("#topic").text("Topic changed to "+data);
+				vis.setTopics(data);
+			});
+			
+		}
+
+		});
+	});
+	
+	// Message Lists
+	 $('#textList').load('/admin/loadMessages/text', function() {
+		 $(".tmessage").editable({onEdit:enableTextUpdate});
+	 });
+	 $('#imageList').load('/admin/loadMessages/image', function() {
+		 $(".imessage").editable({onEdit:enableImageUpdate});
+	 });
+		$("#textUpdate").click(function() {
+		$("#textUpdate").attr('disabled', 'true');
+		msgString = listToString("#textList");
+		$.get("/admin/updateMessages?type=text&"+msgString);
+		
+	});
+	$("#imageUpdate").click(function() {
+		$("#imageUpdate").attr('disabled', 'true');
+		msgString = listToString("#imageList");
+		$.get("/admin/updateMessages?type=image&"+msgString);
+	});
+	$("#textUpdate").attr('disabled', 'true');
+	$("#imageUpdate").attr('disabled', 'true');
+	
+	$("#textList").sortable({
+		axis: "y",
+		cursor: "move",
+		update: function() { enableUpdate("#textUpdate"); }
+	});
+	$("#imageList").sortable({
+		axis: "y",
+		cursor: "move",
+		update: function() { enableUpdate("#imageUpdate"); }
+	});
+
+	// Start + Stop
+	$.get("/admin/sender/getStatus", function(data) {
+			$("#serverStatus").html(data);
+		});
+	$("#serverStart").click(function() {
+		$.get("/admin/sender/start", function(data) {
+			$("#serverStatus").html(data);
+		});
+	});
+	$("#serverStop").click(function() {
+		$.get("/admin/sender/stop", function(data) {
+			$("#serverStatus").html(data);
+		});
+	});
+    
+});
+
+function listToString(list) {
+	var msgString = '';
+	var msgList = $(list).sortable("toArray");
+	for (item in msgList) {
+		msgString+= 'msg_'+item+'='+escape($('#'+msgList[item]).text())+"&";
+	}
+	return msgString;
+}
+
+function enableUpdate(button) {
+	$(button).removeAttr('disabled');	
+};
+
+function enableTextUpdate() {
+	$("#textUpdate").removeAttr('disabled');	
+};
+
+function enableImageUpdate() {
+	$("#imageUpdate").removeAttr('disabled');	
+};
+
+function changeBearer(bearer) {
+	$(".amParameter").hide();
+	$(".dabParameter").hide();
+	$(".fmParameter").hide();
+	$(".hdParameter").hide();
+	$("."+bearer+"Parameter").show();
+	return
+}
+
+function stationError(id, message) {
+	$("#stationError").text(message);
+	$("#stationError").show("fast");
+	$("#"+id).css("background-color","#ffaeae");
+	$("#"+id).focus();
+	return
+}
+
+function padFreq(freq) {
+	var n = freq + '';
+	while(n.length < 5) {
+		n = "0" + n;
+	}
+	return n;
+}
+
+</script>
+</head>
+<body>
+<h1>RadioVIS Server</h1>
+<div id="container1">
+<fieldset>
+<legend>Controls</legend>
+<div id="status">
+Server status: <span id="serverStatus"></span>
+<input type="button" id="serverStart" value="Start" />
+<input type="button" id="serverStop" value="Stop" />
+</div>
+</fieldset>
+<form name="stationForm" id="stationForm">
+<fieldset>
+<legend>Enter station parameters</legend>
+<div id="stationError">Hey there!</div>
+<div class="parameter">
+<label for="bearer">Bearer</label>
+<select name="bearer" id="bearer">
+  <option value="am" selected>AM</option>
+  <option value="dab">DAB</option>
+  <option value="fm">VHF</option>
+  <option value="hd">HD</option>
+</select>
+</div><div class="amParameter">
+<label id="amTypelabel" for="amType">Broadcast type:</label>
+<select name="amType" id="amType">
+  <option value="drm">DRM</option>
+  <option value="amss">AMSS</option>
+</select>
+</div><div class="amParameter">
+<label id="amSidlabel" for="amSid">Service Identifier</label>
+<input name="amSid" id="amSid" size="6" maxlength="6" />
+</div><div class="dabParameter">
+<label id="dabEcclabel" for="dabEcc">Country Code</label>
+<input name="dabEcc" id="dabEcc" size="3" maxlength="3" />
+</div><div class="dabParameter">
+<label id="dabEidlabel" for="dabEid">Ensemble Identfer</label>
+<input name="dabEid" id="dabEid" size="4" maxlength="4" />
+</div><div class="dabParameter">
+<label id="dabSidlabel" for="dabSid">Service Identifier</label>
+<input name="dabSid" id="dabSid" size="8" maxlength="8" />
+</div><div class="dabParameter">
+<label id="dabScidslabel" for="dabScids">Service Component Identfer</label>
+<input name="dabScids" id="dabScids" size="3" maxlength="3" />
+</div><div class="dabParameter">
+<label id="dabApptylabel" for="dabAppty">X-PAD and User Application Types</label>
+<input name="dabAppty" id="dabAppty" size="6" maxlength="6" />
+</div><div class="dabParameter">
+<label id="dabPalabel" for="dabPa">Packet Address</label>
+<input name="dabPa" id="dabPa" size="4" maxlength="4" />
+</div><div class="fmParameter">
+<label id="fmEcclabel" for="fmEcc">Country code or identifier</label>
+<input name="fmEcc" id="fmEcc" size="3" maxlength="3" />
+</div><div class="fmParameter">
+<label id="fmPilabel" for="fmPi">PI Code</label>
+<input name="fmPi" id="fmPi" size="4" maxlength="4" />
+</div><div class="fmParameter">
+<label id="fmFreqlabel" for="fmFreq">Frequency (MHz)</label>
+<input name="fmFreq" id="fmFreq" size="6" maxlength="6" />
+</div><div class="hdParameter">
+<label id="hdCclabel" for="hdCc">Country Code</label>
+<input name="hdCc" id="hdCc" size="3" maxlength="3" />
+</div><div class="hdParameter">
+<label id="hdTxlabel" for="hdTx">Transmitter Identifier</label>
+<input name="hdTx" id="hdTx" size="5" maxlength="5" />
+</div>
+<input name="setButton" id="setButton" type="button" value="set" />
+<div id="topic"></div>
+</fieldset>
+</form>
+</div>
+<!--div id="topic"></div-->
+<div id="left">
+<fieldset>
+<legend>Messages</legend>
+<div class="instructions">Enter the text messages in the boxes below. Click to edit, or drag to reorder. To save any changes and refresh the feed, click the update button.</div>
+<ul id="textList"></ul>
+<input type="submit" id="textUpdate" value="Update" />
+</fieldset>
+</div>
+<div id="right">
+<fieldset>
+<legend>Slide URLs</legend>
+<div class="instructions">Enter the URLs for the slides in the boxes below - eg http://imgur.com/Ibi3c.jpg<br />Click to edit, or drag to reorder. To save any changes and refresh the feed, click the update button.</div>
+<ul id="imageList"></ul>
+<input type="submit" id="imageUpdate" value="Update" />
+</fieldset>
+</div>
+<div id="viewer">
+<p id="cometText">Comet Viewer</p>
+<div>
+<ul><li></li></ul>
+</div>
+</div>
+<!--p id="cometText">Comet Viewer</p-->
+</body>
+</html>
