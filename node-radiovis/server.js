@@ -19,7 +19,7 @@
 */
 
 // Application Configuration
-var restrict_admin = false, // Restricts access to the admin console to localhost only
+var restrict_admin = true, // Restricts access to the admin console to localhost only
     port = 80,              // Port the web server (vis-http and admin interface) runs on
     stomp_port = 61613;     // Port STOMP server runs on
     
